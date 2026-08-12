@@ -29,8 +29,8 @@ else
 fi
 
 if ! command -v ruff >/dev/null 2>&1 || [[ "$(ruff --version)" != "ruff ${RUFF_VERSION}" ]]; then
-  echo "==> pip install ruff==${RUFF_VERSION}"
-  pip install -q "ruff==${RUFF_VERSION}"
+  echo "==> python -m pip install ruff==${RUFF_VERSION}"
+  python -m pip install -q "ruff==${RUFF_VERSION}"
 fi
 
 echo "==> python image_cull.py --self-check"

@@ -337,7 +337,7 @@ Example with multiple lenses (`mixed` / `ai-fun` / `photos`):
 
 That script is what CI runs (plus an advisory Trivy scan that stays GitHub-only for SARIF upload). Host needs:
 
-- Python deps: `pip install -r requirements.txt`
+- Python deps: `python -m pip install -r requirements.txt`
 - Linux: system `libheif` (e.g. `libheif1` / `libheif`) for HEIF decode
 - `ruff` at the pin in `check.sh` (script installs it if missing/mismatched)
 - `shellcheck`
