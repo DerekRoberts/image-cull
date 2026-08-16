@@ -15,26 +15,35 @@ need() {
   }
 }
 
-need python
+if command -v python >/dev/null 2>&1; then
+  PYTHON=python
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+else
+  echo "error: missing python or python3 on PATH" >&2
+  exit 1
+fi
+
 need shellcheck
 
-# Prefer a working docker (CI); fall back to podman (common on Fedora).
+# Prefer a working docker (CI); fall back to a working podman (common on Fedora).
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   CONTAINER_ENGINE=docker
-elif command -v podman >/dev/null 2>&1; then
+elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
   CONTAINER_ENGINE=podman
 else
   echo "error: need a working docker or podman on PATH" >&2
   exit 1
 fi
 
-if ! command -v ruff >/dev/null 2>&1 || [[ "$(ruff --version)" != "ruff ${RUFF_VERSION}" ]]; then
-  echo "==> python -m pip install ruff==${RUFF_VERSION}"
-  python -m pip install -q "ruff==${RUFF_VERSION}"
+# Prefix match: tolerate optional build suffixes in `ruff --version`.
+if ! command -v ruff >/dev/null 2>&1 || [[ "$(ruff --version)" != "ruff ${RUFF_VERSION}"* ]]; then
+  echo "==> ${PYTHON} -m pip install ruff==${RUFF_VERSION}"
+  "${PYTHON}" -m pip install -q "ruff==${RUFF_VERSION}"
 fi
 
-echo "==> python image_cull.py --self-check"
-python image_cull.py --self-check
+echo "==> ${PYTHON} image_cull.py --self-check"
+"${PYTHON}" image_cull.py --self-check
 
 echo "==> ruff check image_cull.py"
 ruff check image_cull.py
