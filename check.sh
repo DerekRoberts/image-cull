@@ -31,13 +31,23 @@ ruff_ver() {
 }
 
 ensure_python() {
-  # Absolute path so a later .venv never shadows the interpreter that has app deps.
-  if command -v python >/dev/null 2>&1; then
+  # Prefer .venv when it has app deps (README / PEP 668 local flow).
+  # Else use PATH python that can import them (CI setup-python). Never
+  # prepend .venv/bin to PATH — that shadows a good interpreter with an
+  # empty one after ensure_ruff installs only ruff.
+  has_deps() {
+    [[ -x "$1" ]] && "$1" -c "import ollama, pydantic, PIL, pillow_heif" >/dev/null 2>&1
+  }
+
+  if has_deps "${ROOT}/.venv/bin/python"; then
+    PYTHON="${ROOT}/.venv/bin/python"
+  elif command -v python >/dev/null 2>&1 && has_deps "$(command -v python)"; then
     PYTHON="$(command -v python)"
-  elif command -v python3 >/dev/null 2>&1; then
+  elif command -v python3 >/dev/null 2>&1 && has_deps "$(command -v python3)"; then
     PYTHON="$(command -v python3)"
   else
-    echo "error: missing python or python3 on PATH" >&2
+    echo "error: no Python with app deps (ollama, pydantic, pillow, pillow-heif)" >&2
+    echo "hint: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
     exit 1
   fi
 }
