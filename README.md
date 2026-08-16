@@ -333,22 +333,32 @@ Example with multiple lenses (`mixed` / `ai-fun` / `photos`):
 
 ## Self-check & CI
 
-Run the built-in assertion suite (including HEIF round-trip) without culling:
+**Before push:** `./check.sh`
+
+That script is the local entrypoint; CI runs `./check.sh host` and `./check.sh docker` in parallel (plus an advisory Trivy scan that stays GitHub-only for SARIF upload). Host needs:
+
+- Python 3 on PATH as `python` or `python3`. App deps belong in a venv (PEP 668 on modern distros): `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+- Linux: system `libheif` (e.g. `libheif1` / `libheif`) for HEIF decode
+- `ruff` at the pin in `check.sh` (if missing/mismatched, the script installs it into `.venv/` — never into the system interpreter)
+- `shellcheck`
+- Working Docker, or Podman as fallback
 
 ```bash
-pip install -r requirements.txt
-# Linux: system libheif if pillow-heif wheels need it
+./check.sh          # host + docker
+./check.sh host     # self-check, ruff, shellcheck
+./check.sh docker   # image build + container --self-check
+```
+
+Individual pieces if you only need one:
+
+```bash
 python image_cull.py --self-check
+ruff check image_cull.py
+shellcheck setup.sh check.sh
+docker build -t image-cull:local . && docker run --rm image-cull:local --self-check
 ```
 
-Or via the container:
-
-```bash
-docker build -t image-cull .
-docker run --rm image-cull --self-check
-```
-
-GitHub Actions (`.github/workflows/ci.yml`) runs `--self-check` on the host and inside a fresh image build, plus ruff, shellcheck, and an advisory Trivy fs scan. The `Results` job is the intended single required status check on `main`.
+The `Results` job in `.github/workflows/ci.yml` is the intended single required status check on `main`.
 
 ---
 

@@ -14,8 +14,8 @@ concurrency:
 permissions: {}
 
 jobs:
-  self-check:
-    name: Self-check
+  check:
+    name: Check
     if: (! github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -30,23 +30,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install system + Python deps
+      - name: Install host deps
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libheif1
-          pip install -r requirements.txt
+          sudo apt-get install -y --no-install-recommends libheif1 shellcheck
+          python -m pip install -r requirements.txt
 
-      - name: Run --self-check
-        run: |
-          set -euo pipefail
-          python image_cull.py --self-check
+      - name: Run check.sh host
+        run: ./check.sh host
 
   docker:
     name: Docker
     if: (! github.event.pull_request.draft)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -54,36 +52,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build and smoke
-        run: |
-          set -euo pipefail
-          docker build -t image-cull:ci .
-          docker run --rm image-cull:ci --self-check
-
-  lint:
-    name: Lint
-    if: (! github.event.pull_request.draft)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Ruff + shellcheck
-        run: |
-          set -euo pipefail
-          pip install ruff
-          ruff check image_cull.py
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck setup.sh
+      - name: Run check.sh docker
+        run: ./check.sh docker
 
   trivy:
     name: Trivy
@@ -133,7 +103,7 @@ jobs:
   # ==========================================================================
   results:
     name: Results
-    needs: [self-check, docker, lint, trivy]
+    needs: [check, docker, trivy]
     if: always() && (! github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 1
