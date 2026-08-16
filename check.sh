@@ -25,16 +25,17 @@ need() {
   }
 }
 
-ruff_version() {
+ruff_ver() {
   # Second field only — avoids suffix false-negatives and 0.16.2 vs 0.16.20 globs.
-  ruff --version | awk '{print $2}'
+  "$1" --version | awk '{print $2}'
 }
 
 ensure_python() {
+  # Absolute path so a later .venv never shadows the interpreter that has app deps.
   if command -v python >/dev/null 2>&1; then
-    PYTHON=python
+    PYTHON="$(command -v python)"
   elif command -v python3 >/dev/null 2>&1; then
-    PYTHON=python3
+    PYTHON="$(command -v python3)"
   else
     echo "error: missing python or python3 on PATH" >&2
     exit 1
@@ -42,21 +43,21 @@ ensure_python() {
 }
 
 ensure_ruff() {
-  if command -v ruff >/dev/null 2>&1 && [[ "$(ruff_version)" == "${RUFF_VERSION}" ]]; then
+  # Never prepend .venv/bin to PATH — that replaces `python` with an empty venv.
+  if command -v ruff >/dev/null 2>&1 && [[ "$(ruff_ver ruff)" == "${RUFF_VERSION}" ]]; then
+    RUFF="$(command -v ruff)"
     return
   fi
   if [[ -x "${ROOT}/.venv/bin/ruff" ]] &&
-    [[ "$("${ROOT}/.venv/bin/ruff" --version | awk '{print $2}')" == "${RUFF_VERSION}" ]]; then
-    PATH="${ROOT}/.venv/bin:${PATH}"
-    export PATH
+    [[ "$(ruff_ver "${ROOT}/.venv/bin/ruff")" == "${RUFF_VERSION}" ]]; then
+    RUFF="${ROOT}/.venv/bin/ruff"
     return
   fi
   # PEP 668: never pip-install into a distro interpreter; use a local venv.
   echo "==> ${PYTHON} -m venv .venv && pip install ruff==${RUFF_VERSION}"
   "${PYTHON}" -m venv .venv
   "${ROOT}/.venv/bin/pip" install -q "ruff==${RUFF_VERSION}"
-  PATH="${ROOT}/.venv/bin:${PATH}"
-  export PATH
+  RUFF="${ROOT}/.venv/bin/ruff"
 }
 
 ensure_container() {
@@ -79,8 +80,8 @@ run_host() {
   echo "==> ${PYTHON} image_cull.py --self-check"
   "${PYTHON}" image_cull.py --self-check
 
-  echo "==> ruff check image_cull.py"
-  ruff check image_cull.py
+  echo "==> ${RUFF} check image_cull.py"
+  "${RUFF}" check image_cull.py
 
   echo "==> shellcheck setup.sh check.sh"
   shellcheck setup.sh check.sh
