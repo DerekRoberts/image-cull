@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # Local + CI validation. Keep in lockstep with .github/workflows/ci.yml.
+# Usage: ./check.sh [all|host|docker]  (default: all)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+
+MODE="${1:-all}"
+case "${MODE}" in
+  all | host | docker) ;;
+  *)
+    echo "usage: $0 [all|host|docker]" >&2
+    exit 1
+    ;;
+esac
 
 # Pin matches CI/local; bump here when upgrading ruff.
 RUFF_VERSION="0.16.2"
@@ -15,46 +25,84 @@ need() {
   }
 }
 
-if command -v python >/dev/null 2>&1; then
-  PYTHON=python
-elif command -v python3 >/dev/null 2>&1; then
-  PYTHON=python3
-else
-  echo "error: missing python or python3 on PATH" >&2
-  exit 1
-fi
+ruff_version() {
+  # Second field only — avoids suffix false-negatives and 0.16.2 vs 0.16.20 globs.
+  ruff --version | awk '{print $2}'
+}
 
-need shellcheck
+ensure_python() {
+  if command -v python >/dev/null 2>&1; then
+    PYTHON=python
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+  else
+    echo "error: missing python or python3 on PATH" >&2
+    exit 1
+  fi
+}
 
-# Prefer a working docker (CI); fall back to a working podman (common on Fedora).
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  CONTAINER_ENGINE=docker
-elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-  CONTAINER_ENGINE=podman
-else
-  echo "error: need a working docker or podman on PATH" >&2
-  exit 1
-fi
+ensure_ruff() {
+  if command -v ruff >/dev/null 2>&1 && [[ "$(ruff_version)" == "${RUFF_VERSION}" ]]; then
+    return
+  fi
+  if [[ -x "${ROOT}/.venv/bin/ruff" ]] &&
+    [[ "$("${ROOT}/.venv/bin/ruff" --version | awk '{print $2}')" == "${RUFF_VERSION}" ]]; then
+    PATH="${ROOT}/.venv/bin:${PATH}"
+    export PATH
+    return
+  fi
+  # PEP 668: never pip-install into a distro interpreter; use a local venv.
+  echo "==> ${PYTHON} -m venv .venv && pip install ruff==${RUFF_VERSION}"
+  "${PYTHON}" -m venv .venv
+  "${ROOT}/.venv/bin/pip" install -q "ruff==${RUFF_VERSION}"
+  PATH="${ROOT}/.venv/bin:${PATH}"
+  export PATH
+}
 
-# Prefix match: tolerate optional build suffixes in `ruff --version`.
-if ! command -v ruff >/dev/null 2>&1 || [[ "$(ruff --version)" != "ruff ${RUFF_VERSION}"* ]]; then
-  echo "==> ${PYTHON} -m pip install ruff==${RUFF_VERSION}"
-  "${PYTHON}" -m pip install -q "ruff==${RUFF_VERSION}"
-fi
+ensure_container() {
+  # Prefer a working docker (CI); fall back to a working podman (common on Fedora).
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    CONTAINER_ENGINE=docker
+  elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+    CONTAINER_ENGINE=podman
+  else
+    echo "error: need a working docker or podman on PATH" >&2
+    exit 1
+  fi
+}
 
-echo "==> ${PYTHON} image_cull.py --self-check"
-"${PYTHON}" image_cull.py --self-check
+run_host() {
+  ensure_python
+  need shellcheck
+  ensure_ruff
 
-echo "==> ruff check image_cull.py"
-ruff check image_cull.py
+  echo "==> ${PYTHON} image_cull.py --self-check"
+  "${PYTHON}" image_cull.py --self-check
 
-echo "==> shellcheck setup.sh check.sh"
-shellcheck setup.sh check.sh
+  echo "==> ruff check image_cull.py"
+  ruff check image_cull.py
 
-echo "==> ${CONTAINER_ENGINE} build -t image-cull:local ."
-"${CONTAINER_ENGINE}" build -t image-cull:local .
+  echo "==> shellcheck setup.sh check.sh"
+  shellcheck setup.sh check.sh
+}
 
-echo "==> ${CONTAINER_ENGINE} run --rm image-cull:local --self-check"
-"${CONTAINER_ENGINE}" run --rm image-cull:local --self-check
+run_docker() {
+  ensure_container
+
+  echo "==> ${CONTAINER_ENGINE} build -t image-cull:local ."
+  "${CONTAINER_ENGINE}" build -t image-cull:local .
+
+  echo "==> ${CONTAINER_ENGINE} run --rm image-cull:local --self-check"
+  "${CONTAINER_ENGINE}" run --rm image-cull:local --self-check
+}
+
+case "${MODE}" in
+  host) run_host ;;
+  docker) run_docker ;;
+  all)
+    run_host
+    run_docker
+    ;;
+esac
 
 echo "OK: all checks passed"

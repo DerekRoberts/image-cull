@@ -335,17 +335,18 @@ Example with multiple lenses (`mixed` / `ai-fun` / `photos`):
 
 **Before push:** `./check.sh`
 
-That script is what CI runs (plus an advisory Trivy scan that stays GitHub-only for SARIF upload). Host needs:
+That script is the local entrypoint; CI runs `./check.sh host` and `./check.sh docker` in parallel (plus an advisory Trivy scan that stays GitHub-only for SARIF upload). Host needs:
 
-- Python 3 on PATH as `python` or `python3`: `python -m pip install -r requirements.txt` (or `python3 -m pip …`)
-
+- Python 3 on PATH as `python` or `python3`. App deps belong in a venv (PEP 668 on modern distros): `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 - Linux: system `libheif` (e.g. `libheif1` / `libheif`) for HEIF decode
-- `ruff` at the pin in `check.sh` (script installs it if missing/mismatched)
+- `ruff` at the pin in `check.sh` (if missing/mismatched, the script installs it into `.venv/` — never into the system interpreter)
 - `shellcheck`
 - Working Docker, or Podman as fallback
 
 ```bash
-./check.sh
+./check.sh          # host + docker
+./check.sh host     # self-check, ruff, shellcheck
+./check.sh docker   # image build + container --self-check
 ```
 
 Individual pieces if you only need one:

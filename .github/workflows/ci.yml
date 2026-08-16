@@ -37,8 +37,23 @@ jobs:
           sudo apt-get install -y --no-install-recommends libheif1 shellcheck
           python -m pip install -r requirements.txt
 
-      - name: Run check.sh
-        run: ./check.sh
+      - name: Run check.sh host
+        run: ./check.sh host
+
+  docker:
+    name: Docker
+    if: (! github.event.pull_request.draft)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run check.sh docker
+        run: ./check.sh docker
 
   trivy:
     name: Trivy
@@ -88,7 +103,7 @@ jobs:
   # ==========================================================================
   results:
     name: Results
-    needs: [check, trivy]
+    needs: [check, docker, trivy]
     if: always() && (! github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 1
