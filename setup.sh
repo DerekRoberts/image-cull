@@ -128,7 +128,7 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
             ;;
     esac
 
-    echo "==> Ollama backend not running. Starting container 'image-cull-ollama'..."
+    echo "==> Starting container 'image-cull-ollama'..."
     if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
         $CONTAINER_ENGINE start image-cull-ollama >/dev/null 2>&1 || true
     else
