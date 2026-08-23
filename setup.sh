@@ -165,8 +165,8 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
             $CONTAINER_ENGINE run -d \
                 --name image-cull-ollama \
                 --restart=unless-stopped \
-                --network host \
-                -e "OLLAMA_HOST=127.0.0.1:${PORT}" \
+                -p "127.0.0.1:${PORT}:11434" \
+                -e "OLLAMA_HOST=0.0.0.0:11434" \
                 -v image-cull-ollama-models:/root/.ollama:z \
                 docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
         else
@@ -176,8 +176,8 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
         $CONTAINER_ENGINE run -d \
             --name image-cull-ollama \
             --restart=unless-stopped \
-            --network host \
-            -e "OLLAMA_HOST=127.0.0.1:${PORT}" \
+            -p "127.0.0.1:${PORT}:11434" \
+            -e "OLLAMA_HOST=0.0.0.0:11434" \
             -v image-cull-ollama-models:/root/.ollama:z \
             docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
     fi
@@ -188,7 +188,7 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
 
     attempts=0
     ready=false
-    while [ $attempts -lt 30 ]; do
+    while [ $attempts -lt 120 ]; do
         if check_endpoint "http://127.0.0.1:${PORT}"; then
             ready=true
             break
