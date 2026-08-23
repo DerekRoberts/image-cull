@@ -33,9 +33,15 @@ cd image-cull
 ./setup.sh
 ```
 
-The `./setup.sh` script builds the container image, pre-caches the Ollama backend container, and installs the standalone `image-cull` binary wrapper into `~/.local/bin/image-cull`.
+The `./setup.sh` script builds the `image-cull` container image, pre-caches the Ollama container, and installs the standalone `image-cull` binary wrapper into `~/.local/bin/image-cull`.
+
+### 3. Backend Lifecycle
+- **Zero Configuration:** When you run `image-cull`, the wrapper checks if an Ollama service is reachable. If not, it automatically spawns a background `image-cull-ollama` container, runs your command, and stops the backend on exit.
+- **Model Persistence:** Downloaded vision models (`llava`, `llama3.2-vision`, `qwen2.5-vl`) persist across runs inside a named volume (`image-cull-ollama-models`).
+- **Remote / Pre-existing Ollama:** If you already run Ollama on host or a remote server, export `OLLAMA_HOST="http://<ip>:<port>"` and `image-cull` will use that endpoint instead.
 
 ---
+
 
 ## Usage
 
