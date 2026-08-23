@@ -171,7 +171,7 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
     attempts=0
     ready=false
     while [ $attempts -lt 20 ]; do
-        if check_endpoint "http://127.0.0.1:11434"; then
+        if check_endpoint "http://127.0.0.1:${PORT}"; then
             ready=true
             break
         fi
@@ -180,11 +180,11 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
     done
 
     if [ "$ready" = false ]; then
-        echo "Error: Ollama backend started but did not respond on http://127.0.0.1:11434 within timeout." >&2
+        echo "Error: Ollama backend started but did not respond on http://127.0.0.1:${PORT} within timeout." >&2
         exit 1
     fi
 
-    ENV_FLAGS=("-e" "OLLAMA_HOST=http://127.0.0.1:11434")
+    ENV_FLAGS=("-e" "OLLAMA_HOST=http://127.0.0.1:${PORT}")
 fi
 
 $CONTAINER_ENGINE run --rm --network host \
