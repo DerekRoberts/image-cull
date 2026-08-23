@@ -18,7 +18,7 @@ fi
 $CONTAINER_ENGINE build -t image-cull:latest "$PROJECT_DIR"
 
 echo "==> Ensuring Ollama backend image is cached..."
-$CONTAINER_ENGINE pull docker.io/ollama/ollama:latest
+$CONTAINER_ENGINE pull docker.io/ollama/ollama:latest || echo "Warning: could not pre-cache Ollama image; it will be pulled on first run." >&2
 
 echo "==> Installing executable wrapper script to $BIN_PATH..."
 mkdir -p "$BIN_DIR"
@@ -109,7 +109,7 @@ check_endpoint() {
     if command -v curl >/dev/null 2>&1; then
         curl -s -f "${endpoint}/" >/dev/null 2>&1 || curl -s -f "${endpoint}/api/tags" >/dev/null 2>&1
     elif command -v python3 >/dev/null 2>&1; then
-        python3 -c "import urllib.request; urllib.request.urlopen('${endpoint}/', timeout=1)" >/dev/null 2>&1
+        python3 -c "import sys, urllib.request; urllib.request.urlopen(sys.argv[1] + '/', timeout=1)" "$endpoint" >/dev/null 2>&1
     else
         return 1
     fi
@@ -117,10 +117,16 @@ check_endpoint() {
 
 TARGET_ENDPOINT="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 if ! check_endpoint "$TARGET_ENDPOINT"; then
-    if [ -n "${OLLAMA_HOST:-}" ] && [[ "${OLLAMA_HOST}" != *"localhost"* && "${OLLAMA_HOST}" != *"127.0.0.1"* ]]; then
-        echo "Error: Cannot reach remote Ollama at ${OLLAMA_HOST}" >&2
-        exit 1
-    fi
+    HOST_PART="${TARGET_ENDPOINT#*://}"
+    HOST_PART="${HOST_PART%%/*}"
+    HOST_PART="${HOST_PART%%:*}"
+    case "$HOST_PART" in
+        "" | "127.0.0.1" | "localhost" | "::1" | "0.0.0.0" | "[::1]") ;;
+        *)
+            echo "Error: Cannot reach remote Ollama at ${TARGET_ENDPOINT}" >&2
+            exit 1
+            ;;
+    esac
 
     echo "==> Ollama backend not running. Starting container 'image-cull-ollama'..."
     if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
@@ -136,13 +142,20 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
     SPAWNED_OLLAMA=true
 
     attempts=0
+    ready=false
     while [ $attempts -lt 20 ]; do
-        if check_endpoint "http://127.0.0.1:11434"; then
+        if check_endpoint "$TARGET_ENDPOINT"; then
+            ready=true
             break
         fi
         sleep 0.5
         attempts=$((attempts + 1))
     done
+
+    if [ "$ready" = false ]; then
+        echo "Error: Ollama backend started but did not respond on ${TARGET_ENDPOINT} within timeout." >&2
+        exit 1
+    fi
 fi
 
 $CONTAINER_ENGINE run --rm --network host \
