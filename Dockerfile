@@ -11,4 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY image_cull.py .
 
+HEALTHCHECK NONE
+
 ENTRYPOINT ["python", "image_cull.py"]
