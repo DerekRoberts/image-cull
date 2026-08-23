@@ -94,6 +94,16 @@ if [ -n "${OLLAMA_HOST:-}" ]; then
     ENV_FLAGS+=("-e" "OLLAMA_HOST=${OLLAMA_HOST}")
 fi
 
+SPAWNED_OLLAMA=false
+
+cleanup() {
+    if [ "$SPAWNED_OLLAMA" = true ]; then
+        echo "==> Stopping Ollama backend..." >&2
+        $CONTAINER_ENGINE stop image-cull-ollama >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
 check_endpoint() {
     local endpoint="${1%/}"
     if command -v curl >/dev/null 2>&1; then
@@ -123,6 +133,7 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
             -v image-cull-ollama-models:/root/.ollama:z \
             docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
     fi
+    SPAWNED_OLLAMA=true
 
     attempts=0
     while [ $attempts -lt 20 ]; do
@@ -134,11 +145,13 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
     done
 fi
 
-exec $CONTAINER_ENGINE run --rm --network host \
+$CONTAINER_ENGINE run --rm --network host \
     "${USER_FLAGS[@]}" \
     "${ENV_FLAGS[@]}" \
     "${MOUNTS[@]}" \
     image-cull:latest --dir /photos --report-path-display "$REAL_HOST_DIR/cull-report.json" "${CONTAINER_FLAGS[@]}" "${ARGS[@]}"
+EXIT_CODE=$?
+exit $EXIT_CODE
 EOF
 
 chmod +x "$BIN_PATH"
