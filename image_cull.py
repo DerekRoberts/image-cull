@@ -1924,9 +1924,13 @@ def _check_recursive_cull():
             force_reapply=False
         )
 
-        with patch.object(mod, "ensure_model"), patch.object(mod, "process_image", side_effect=mock_process):
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                run_cull(args, input_dir, filter_dir)
+        with (
+            patch.object(mod, "ensure_model"),
+            patch.object(mod, "process_image", side_effect=mock_process),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO())
+        ):
+            run_cull(args, input_dir, filter_dir)
         
         report_path = input_dir / DEFAULT_REPORT_NAME
         _, results = load_report(report_path)
