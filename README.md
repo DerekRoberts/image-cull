@@ -20,8 +20,7 @@ Evaluates image quality, detects generation artifacts and defects (e.g. plastic 
 ## Quickstart
 
 ### 1. Prerequisites
-- [Ollama](https://ollama.com) running locally (`ollama serve`).
-- Podman or Docker installed.
+- Podman or Docker installed. (No bare-metal Ollama daemon installation required; `image-cull` automatically runs and manages a containerized Ollama backend).
 
 Supported input formats: `.png`, `.jpg`, `.jpeg`, `.webp`, `.heic`, `.heif`. HEIC decoding uses `pillow-heif` (registered at startup). The Docker image installs `libheif1` for HEIF decode in the container; local runs need `pillow-heif` from `requirements.txt` (and on Linux, system `libheif` if wheels are unavailable).
 
@@ -34,9 +33,15 @@ cd image-cull
 ./setup.sh
 ```
 
-The `./setup.sh` script builds the container image and installs the standalone `image-cull` binary wrapper into `~/.local/bin/image-cull`.
+The `./setup.sh` script builds the `image-cull` container image, pre-caches the Ollama container, and installs the standalone `image-cull` binary wrapper into `~/.local/bin/image-cull`.
+
+### 3. Backend Lifecycle
+- **Zero Configuration:** When you run `image-cull`, the wrapper checks if an Ollama service is reachable. If not, it automatically spawns a background `image-cull-ollama` container, runs your command, and stops the backend on exit.
+- **Model Persistence:** Downloaded vision models (`llava`, `llama3.2-vision`, `qwen2.5-vl`) persist across runs inside a named volume (`image-cull-ollama-models`).
+- **Remote / Pre-existing Ollama:** If you already run Ollama on host or a remote server, export `OLLAMA_HOST="http://<ip>:<port>"` and `image-cull` will use that endpoint instead.
 
 ---
+
 
 ## Usage
 

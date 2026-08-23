@@ -17,6 +17,9 @@ fi
 
 $CONTAINER_ENGINE build -t image-cull:latest "$PROJECT_DIR"
 
+echo "==> Ensuring Ollama backend image is cached..."
+$CONTAINER_ENGINE pull docker.io/ollama/ollama:latest || echo "Warning: could not pre-cache Ollama image; it will be pulled on first run." >&2
+
 echo "==> Installing executable wrapper script to $BIN_PATH..."
 mkdir -p "$BIN_DIR"
 
@@ -86,10 +89,129 @@ if ! command -v podman >/dev/null 2>&1; then
     USER_FLAGS=("--user" "$(id -u):$(id -g)")
 fi
 
-exec $CONTAINER_ENGINE run --rm --network host \
+ENV_FLAGS=()
+if [ -n "${OLLAMA_HOST:-}" ]; then
+    ENV_FLAGS+=("-e" "OLLAMA_HOST=${OLLAMA_HOST}")
+fi
+
+SPAWNED_OLLAMA=false
+
+cleanup() {
+    if [ "$SPAWNED_OLLAMA" = true ]; then
+        echo "==> Stopping Ollama backend..." >&2
+        $CONTAINER_ENGINE stop image-cull-ollama >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+check_endpoint() {
+    local endpoint="${1%/}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -f --max-time 1 "${endpoint}/api/tags" >/dev/null 2>&1
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import sys, urllib.request
+endpoint = sys.argv[1].rstrip("/")
+def ok(url: str) -> bool:
+    try:
+        urllib.request.urlopen(url, timeout=1).read(1)
+        return True
+    except Exception:
+        return False
+sys.exit(0 if ok(endpoint + "/api/tags") else 1)
+' "$endpoint" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+TARGET_ENDPOINT="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+if [ -n "${OLLAMA_HOST:-}" ] && [[ "$TARGET_ENDPOINT" != http://* && "$TARGET_ENDPOINT" != https://* ]]; then
+    TARGET_ENDPOINT="http://${TARGET_ENDPOINT}"
+fi
+
+if ! check_endpoint "$TARGET_ENDPOINT"; then
+    HOST_PART="${TARGET_ENDPOINT#*://}"
+    HOST_PART="${HOST_PART%%/*}"
+    HOST_PART="${HOST_PART%%:*}"
+    case "$HOST_PART" in
+        "" | "127.0.0.1" | "localhost" | "::1" | "0.0.0.0" | "[::1]") ;;
+        *)
+            echo "Error: Cannot reach remote Ollama at ${TARGET_ENDPOINT}" >&2
+            exit 1
+            ;;
+    esac
+
+    WAS_RUNNING=false
+    if [ "$($CONTAINER_ENGINE inspect -f '{{.State.Running}}' image-cull-ollama 2>/dev/null)" = "true" ]; then
+        WAS_RUNNING=true
+    fi
+
+    PORT="11434"
+    if [[ "$TARGET_ENDPOINT" =~ :([0-9]+)/?$ ]]; then
+        PORT="${BASH_REMATCH[1]}"
+    fi
+
+    echo "==> Starting container 'image-cull-ollama'..."
+    if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
+        EXISTING_PORT="$($CONTAINER_ENGINE inspect -f '{{range .Config.Env}}{{println .}}{{end}}' image-cull-ollama 2>/dev/null | awk -F: '/^OLLAMA_HOST=/{print $NF}' || echo "11434")"
+        if [ -z "$EXISTING_PORT" ]; then EXISTING_PORT="11434"; fi
+        if [ "$EXISTING_PORT" != "$PORT" ]; then
+            if [ "$WAS_RUNNING" = true ]; then
+                echo "Error: Pre-existing image-cull-ollama is bound to port ${EXISTING_PORT}." >&2
+                echo "Please match OLLAMA_HOST or stop it manually." >&2
+                exit 1
+            fi
+            $CONTAINER_ENGINE rm -f image-cull-ollama >/dev/null 2>&1 || true
+            $CONTAINER_ENGINE run -d \
+                --name image-cull-ollama \
+                --restart=unless-stopped \
+                --network host \
+                -e "OLLAMA_HOST=127.0.0.1:${PORT}" \
+                -v image-cull-ollama-models:/root/.ollama:z \
+                docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
+        else
+            $CONTAINER_ENGINE start image-cull-ollama >/dev/null 2>&1 || true
+        fi
+    else
+        $CONTAINER_ENGINE run -d \
+            --name image-cull-ollama \
+            --restart=unless-stopped \
+            --network host \
+            -e "OLLAMA_HOST=127.0.0.1:${PORT}" \
+            -v image-cull-ollama-models:/root/.ollama:z \
+            docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
+    fi
+
+    if [ "$WAS_RUNNING" = false ]; then
+        SPAWNED_OLLAMA=true
+    fi
+
+    attempts=0
+    ready=false
+    while [ $attempts -lt 30 ]; do
+        if check_endpoint "http://127.0.0.1:${PORT}"; then
+            ready=true
+            break
+        fi
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+
+    if [ "$ready" = false ]; then
+        echo "Error: Ollama backend started but did not respond on http://127.0.0.1:${PORT} within timeout." >&2
+        exit 1
+    fi
+
+    ENV_FLAGS=("-e" "OLLAMA_HOST=http://127.0.0.1:${PORT}")
+fi
+
+$CONTAINER_ENGINE run --rm --network host \
     "${USER_FLAGS[@]}" \
+    "${ENV_FLAGS[@]}" \
     "${MOUNTS[@]}" \
     image-cull:latest --dir /photos --report-path-display "$REAL_HOST_DIR/cull-report.json" "${CONTAINER_FLAGS[@]}" "${ARGS[@]}"
+EXIT_CODE=$?
+exit $EXIT_CODE
 EOF
 
 chmod +x "$BIN_PATH"
