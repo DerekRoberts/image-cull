@@ -105,6 +105,28 @@ run_docker() {
 
   echo "==> ${CONTAINER_ENGINE} run --rm image-cull:local --self-check"
   "${CONTAINER_ENGINE}" run --rm image-cull:local --self-check
+
+  echo "==> ${CONTAINER_ENGINE} smoke test (volume mount writes)"
+  SMOKE_DIR="$(mktemp -d)"
+  mkdir -p "${SMOKE_DIR}/photos" "${SMOKE_DIR}/rejects"
+  touch "${SMOKE_DIR}/photos/smoke.jpg"
+  cat << 'EOF' > "${SMOKE_DIR}/photos/cull-report.json"
+{
+  "meta": {"threshold": 7.0, "thresholds": {"ai": 7.0, "quality": null, "generation": null}},
+  "results": [{"file": "smoke.jpg", "analysis": {"realism_score": 1.0, "is_realistic": false, "detected_artifacts": ["test"], "reasoning": "test"}}]
+}
+EOF
+  USER_ARGS=("--user" "$(id -u):$(id -g)")
+  if [ "${CONTAINER_ENGINE}" = "podman" ]; then
+    USER_ARGS=("--userns=keep-id" "${USER_ARGS[@]}")
+  fi
+  "${CONTAINER_ENGINE}" run --rm \
+    "${USER_ARGS[@]}" \
+    -v "${SMOKE_DIR}/photos:/photos:z" \
+    -v "${SMOKE_DIR}/rejects:/filtered:z" \
+    image-cull:local --dir /photos --filter-dir /filtered --apply-report >/dev/null
+  test -f "${SMOKE_DIR}/rejects/smoke.jpg"
+  rm -rf "${SMOKE_DIR}"
 }
 
 case "${MODE}" in

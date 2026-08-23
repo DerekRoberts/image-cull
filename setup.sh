@@ -76,11 +76,14 @@ if [ -n "$FILTER_HOST_DIR" ]; then
 fi
 
 CONTAINER_ENGINE="podman"
+USER_FLAGS=("--userns=keep-id" "--user" "$(id -u):$(id -g)")
 if ! command -v podman >/dev/null 2>&1; then
     CONTAINER_ENGINE="docker"
+    USER_FLAGS=("--user" "$(id -u):$(id -g)")
 fi
 
 exec $CONTAINER_ENGINE run --rm --network host \
+    "${USER_FLAGS[@]}" \
     "${MOUNTS[@]}" \
     image-cull:latest --dir /photos --report-path-display "$REAL_HOST_DIR/cull-report.json" "${CONTAINER_FLAGS[@]}" "${ARGS[@]}"
 EOF
