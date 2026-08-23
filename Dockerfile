@@ -2,14 +2,18 @@ FROM python:3.12-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libheif1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -u 10001 -U -d /app -m -s /usr/sbin/nologin appuser \
+    && chmod 755 /app
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY --chown=appuser:appuser requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY image_cull.py .
+COPY --chown=appuser:appuser image_cull.py .
+
+USER appuser
 
 HEALTHCHECK NONE
 
