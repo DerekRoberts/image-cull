@@ -649,7 +649,13 @@ def unique_reject_path(filter_dir: Path, filename: str) -> Path:
 
 def move_reject(img_path: Path, input_dir: Path, filter_dir: Path, move_lock: threading.Lock | None = None) -> Path:
     def _move() -> Path:
-        rel = img_path.relative_to(input_dir)
+        resolved_img = img_path.resolve()
+        resolved_input = input_dir.resolve()
+        if not resolved_img.is_relative_to(resolved_input):
+            raise ValueError(f"Path escapes input directory: {img_path}")
+        rel = resolved_img.relative_to(resolved_input)
+        if ".." in rel.parts:
+            raise ValueError(f"Invalid path component '..': {rel}")
         dest_dir = filter_dir / rel.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = unique_reject_path(dest_dir, img_path.name)
@@ -1918,8 +1924,9 @@ def _check_recursive_cull():
             force_reapply=False
         )
 
-        with patch.object(mod, "process_image", side_effect=mock_process):
-            run_cull(args, input_dir, filter_dir)
+        with patch.object(mod, "ensure_model"), patch.object(mod, "process_image", side_effect=mock_process):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                run_cull(args, input_dir, filter_dir)
         
         report_path = input_dir / DEFAULT_REPORT_NAME
         _, results = load_report(report_path)
