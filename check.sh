@@ -107,7 +107,12 @@ run_docker() {
   "${CONTAINER_ENGINE}" run --rm image-cull:local --self-check
 
   echo "==> ${CONTAINER_ENGINE} smoke test (volume mount writes)"
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "error: running smoke test as root makes non-root permission validation a no-op" >&2
+    exit 1
+  fi
   SMOKE_DIR="$(mktemp -d)"
+  trap 'rm -rf "${SMOKE_DIR}"' EXIT
   mkdir -p "${SMOKE_DIR}/photos" "${SMOKE_DIR}/rejects"
   touch "${SMOKE_DIR}/photos/smoke.jpg"
   cat << 'EOF' > "${SMOKE_DIR}/photos/cull-report.json"
@@ -127,6 +132,7 @@ EOF
     image-cull:local --dir /photos --filter-dir /filtered --apply-report >/dev/null
   test -f "${SMOKE_DIR}/rejects/smoke.jpg"
   rm -rf "${SMOKE_DIR}"
+  trap - EXIT
 }
 
 case "${MODE}" in

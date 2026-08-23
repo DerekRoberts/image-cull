@@ -22,6 +22,10 @@ mkdir -p "$BIN_DIR"
 
 cat << 'EOF' > "$BIN_PATH"
 #!/usr/bin/env bash
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Error: running image-cull as root is unsupported." >&2
+    exit 1
+fi
 TARGET_DIR="."
 FILTER_HOST_DIR=""
 IS_DRY_RUN=false
