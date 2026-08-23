@@ -20,8 +20,7 @@ Evaluates image quality, detects generation artifacts and defects (e.g. plastic 
 ## Quickstart
 
 ### 1. Prerequisites
-- [Ollama](https://ollama.com) running locally (`ollama serve`).
-- Podman or Docker installed.
+- Podman or Docker installed. (No bare-metal Ollama daemon installation required; `image-cull` automatically runs and manages a containerized Ollama backend).
 
 Supported input formats: `.png`, `.jpg`, `.jpeg`, `.webp`, `.heic`, `.heif`. HEIC decoding uses `pillow-heif` (registered at startup). The Docker image installs `libheif1` for HEIF decode in the container; local runs need `pillow-heif` from `requirements.txt` (and on Linux, system `libheif` if wheels are unavailable).
 
@@ -34,7 +33,7 @@ cd image-cull
 ./setup.sh
 ```
 
-The `./setup.sh` script builds the container image and installs the standalone `image-cull` binary wrapper into `~/.local/bin/image-cull`.
+The `./setup.sh` script builds the container image, pre-caches the Ollama backend container, and installs the standalone `image-cull` binary wrapper into `~/.local/bin/image-cull`.
 
 ---
 

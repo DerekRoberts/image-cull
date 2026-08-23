@@ -17,6 +17,9 @@ fi
 
 $CONTAINER_ENGINE build -t image-cull:latest "$PROJECT_DIR"
 
+echo "==> Ensuring Ollama backend image is cached..."
+$CONTAINER_ENGINE pull docker.io/ollama/ollama:latest
+
 echo "==> Installing executable wrapper script to $BIN_PATH..."
 mkdir -p "$BIN_DIR"
 
@@ -86,8 +89,54 @@ if ! command -v podman >/dev/null 2>&1; then
     USER_FLAGS=("--user" "$(id -u):$(id -g)")
 fi
 
+ENV_FLAGS=()
+if [ -n "${OLLAMA_HOST:-}" ]; then
+    ENV_FLAGS+=("-e" "OLLAMA_HOST=${OLLAMA_HOST}")
+fi
+
+check_endpoint() {
+    local endpoint="${1%/}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -f "${endpoint}/" >/dev/null 2>&1 || curl -s -f "${endpoint}/api/tags" >/dev/null 2>&1
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c "import urllib.request; urllib.request.urlopen('${endpoint}/', timeout=1)" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+TARGET_ENDPOINT="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+if ! check_endpoint "$TARGET_ENDPOINT"; then
+    if [ -n "${OLLAMA_HOST:-}" ] && [[ "${OLLAMA_HOST}" != *"localhost"* && "${OLLAMA_HOST}" != *"127.0.0.1"* ]]; then
+        echo "Error: Cannot reach remote Ollama at ${OLLAMA_HOST}" >&2
+        exit 1
+    fi
+
+    echo "==> Ollama backend not running. Starting container 'image-cull-ollama'..."
+    if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
+        $CONTAINER_ENGINE start image-cull-ollama >/dev/null 2>&1 || true
+    else
+        $CONTAINER_ENGINE run -d \
+            --name image-cull-ollama \
+            --restart=unless-stopped \
+            --network host \
+            -v image-cull-ollama-models:/root/.ollama:z \
+            docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
+    fi
+
+    attempts=0
+    while [ $attempts -lt 20 ]; do
+        if check_endpoint "http://127.0.0.1:11434"; then
+            break
+        fi
+        sleep 0.5
+        attempts=$((attempts + 1))
+    done
+fi
+
 exec $CONTAINER_ENGINE run --rm --network host \
     "${USER_FLAGS[@]}" \
+    "${ENV_FLAGS[@]}" \
     "${MOUNTS[@]}" \
     image-cull:latest --dir /photos --report-path-display "$REAL_HOST_DIR/cull-report.json" "${CONTAINER_FLAGS[@]}" "${ARGS[@]}"
 EOF
