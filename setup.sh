@@ -109,13 +109,26 @@ check_endpoint() {
     if command -v curl >/dev/null 2>&1; then
         curl -s -f "${endpoint}/" >/dev/null 2>&1 || curl -s -f "${endpoint}/api/tags" >/dev/null 2>&1
     elif command -v python3 >/dev/null 2>&1; then
-        python3 -c "import sys, urllib.request; urllib.request.urlopen(sys.argv[1] + '/', timeout=1)" "$endpoint" >/dev/null 2>&1
+        python3 -c 'import sys, urllib.request
+endpoint = sys.argv[1].rstrip("/")
+def ok(url: str) -> bool:
+    try:
+        urllib.request.urlopen(url, timeout=1).read(1)
+        return True
+    except Exception:
+        return False
+sys.exit(0 if (ok(endpoint + "/") or ok(endpoint + "/api/tags")) else 1)
+' "$endpoint" >/dev/null 2>&1
     else
         return 1
     fi
 }
 
 TARGET_ENDPOINT="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+if [ -n "${OLLAMA_HOST:-}" ] && [[ "$TARGET_ENDPOINT" != http://* && "$TARGET_ENDPOINT" != https://* ]]; then
+    TARGET_ENDPOINT="http://${TARGET_ENDPOINT}"
+fi
+
 if ! check_endpoint "$TARGET_ENDPOINT"; then
     HOST_PART="${TARGET_ENDPOINT#*://}"
     HOST_PART="${HOST_PART%%/*}"
@@ -136,7 +149,7 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
             --name image-cull-ollama \
             --restart=unless-stopped \
             --network host \
-            -v image-cull-ollama-models:/root/.ollama:z \
+            -v image-cull-ollama-models:/root/.ollama \
             docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
     fi
     SPAWNED_OLLAMA=true
@@ -144,7 +157,7 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
     attempts=0
     ready=false
     while [ $attempts -lt 20 ]; do
-        if check_endpoint "$TARGET_ENDPOINT"; then
+        if check_endpoint "http://127.0.0.1:11434"; then
             ready=true
             break
         fi
@@ -153,9 +166,11 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
     done
 
     if [ "$ready" = false ]; then
-        echo "Error: Ollama backend started but did not respond on ${TARGET_ENDPOINT} within timeout." >&2
+        echo "Error: Ollama backend started but did not respond on http://127.0.0.1:11434 within timeout." >&2
         exit 1
     fi
+
+    ENV_FLAGS=("-e" "OLLAMA_HOST=http://127.0.0.1:11434")
 fi
 
 $CONTAINER_ENGINE run --rm --network host \
