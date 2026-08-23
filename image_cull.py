@@ -901,7 +901,7 @@ def process_image(
                             dest = move_reject(img_path, input_dir, filter_dir, move_lock)
                             with print_lock:
                                 print(f"{tag}  -> Moved filtered image to {dest}")
-                        except OSError as e:
+                        except (OSError, ValueError) as e:
                             with print_lock:
                                 print(f"{tag}  -> Error moving {rel_path}: {e}")
                             result["move_error"] = str(e)
@@ -965,7 +965,7 @@ def process_image(
                 dest = move_reject(img_path, input_dir, filter_dir, move_lock)
                 with print_lock:
                     print(f"{tag}  -> Moved filtered image to {dest}")
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 with print_lock:
                     print(f"{tag}  -> Error moving {rel_path}: {e}")
                 result["move_error"] = str(e)
