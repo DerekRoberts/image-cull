@@ -711,11 +711,15 @@ def apply_from_report(
         if reject:
             try:
                 dest = move_reject(src, input_dir, filter_dir)
-                print(f"Moved {filename} → {dest.name} ({reason_text})")
+                try:
+                    dest_print = str(dest.relative_to(filter_dir))
+                except ValueError:
+                    dest_print = dest.name
+                print(f"Moved {filename} → {dest_print} ({reason_text})")
                 entry["applied"] = True
                 entry["applied_at"] = datetime.now(timezone.utc).isoformat()
                 moved += 1
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 print(f"Error moving {filename}: {e}")
                 skipped += 1
         else:
@@ -1109,12 +1113,13 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
         ensure_model(args.model)
 
     if getattr(args, "recursive", False):
+        filter_root = filter_dir.resolve(strict=False)
         image_paths = [
             p
             for p in input_dir.rglob("*")
             if p.suffix.lower() in SUPPORTED_EXTENSIONS
             and p.is_file()
-            and not p.is_relative_to(filter_dir)
+            and not p.resolve(strict=False).is_relative_to(filter_root)
         ]
     else:
         image_paths = [p for p in input_dir.iterdir() if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()]
@@ -1422,6 +1427,7 @@ def _self_check():
     _check_generation_profile_cull()
     _check_quality_profile_cull()
     _check_hygiene_profile_cull()
+    _check_recursive_cull()
     _check_quality_score_bounds()
     _check_quality_fast_issue_validation()
     _check_heif_support()
@@ -1865,6 +1871,64 @@ def main():
 
     run_cull(args, input_dir, filter_dir)
 
+
+
+def _check_recursive_cull():
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    from unittest.mock import patch
+    mod = sys.modules[__name__]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        input_dir = Path(tmp) / "input"
+        input_dir.mkdir()
+        sub = input_dir / "sub" / "deep"
+        sub.mkdir(parents=True)
+        (sub / "nested.jpg").write_bytes(b"x")
+        (input_dir / "top.jpg").write_bytes(b"x")
+        
+        filter_dir = input_dir / "rejects"
+        filter_sub = filter_dir / "sub"
+        filter_sub.mkdir(parents=True)
+        (filter_sub / "rejected.jpg").write_bytes(b"x")
+
+        # mock so we can just trace files without ollama logic breaking
+        def mock_process(img_path, *args, **kwargs):
+            return {"file": img_path.relative_to(input_dir).as_posix()}
+        
+        args = argparse.Namespace(
+            dir=str(input_dir),
+            filter_dir=str(filter_dir),
+            recursive=True,
+            model="llava",
+            threshold=5.0,
+            threshold_ai=None,
+            threshold_quality=None,
+            threshold_generation=None,
+            profile=None,
+            checks=None,
+            dry_run=True,
+            min_res=None,
+            max_dimension=0,
+            fast=False,
+            self_check=False,
+            apply_report=None,
+            report_path_display=None,
+            force_reapply=False
+        )
+
+        with patch.object(mod, "process_image", side_effect=mock_process):
+            run_cull(args, input_dir, filter_dir)
+        
+        report_path = input_dir / DEFAULT_REPORT_NAME
+        _, results = load_report(report_path)
+        files = [r["file"] for r in results]
+        
+        assert len(files) == 2, f"Expected 2 files, got {len(files)}"
+        assert "top.jpg" in files
+        assert "sub/deep/nested.jpg" in files
+        assert "rejects/sub/rejected.jpg" not in files, "Filter dir should be excluded"
 
 if __name__ == "__main__":
     main()
