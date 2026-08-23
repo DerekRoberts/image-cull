@@ -107,7 +107,7 @@ trap cleanup EXIT INT TERM
 check_endpoint() {
     local endpoint="${1%/}"
     if command -v curl >/dev/null 2>&1; then
-        curl -s -f "${endpoint}/" >/dev/null 2>&1 || curl -s -f "${endpoint}/api/tags" >/dev/null 2>&1
+        curl -s -f --max-time 1 "${endpoint}/" >/dev/null 2>&1 || curl -s -f --max-time 1 "${endpoint}/api/tags" >/dev/null 2>&1
     elif command -v python3 >/dev/null 2>&1; then
         python3 -c 'import sys, urllib.request
 endpoint = sys.argv[1].rstrip("/")
@@ -147,19 +147,32 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
     fi
 
     PORT="11434"
-    if [[ "$TARGET_ENDPOINT" =~ :([0-9]+) ]]; then
+    if [[ "$TARGET_ENDPOINT" =~ :([0-9]+)/?$ ]]; then
         PORT="${BASH_REMATCH[1]}"
     fi
 
     echo "==> Starting container 'image-cull-ollama'..."
     if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
-        $CONTAINER_ENGINE start image-cull-ollama >/dev/null 2>&1 || true
+        EXISTING_PORT="$($CONTAINER_ENGINE inspect -f '{{range .Config.Env}}{{println .}}{{end}}' image-cull-ollama 2>/dev/null | awk -F: '/^OLLAMA_HOST=/{print $NF}' || echo "11434")"
+        if [ -z "$EXISTING_PORT" ]; then EXISTING_PORT="11434"; fi
+        if [ "$EXISTING_PORT" != "$PORT" ]; then
+            $CONTAINER_ENGINE rm -f image-cull-ollama >/dev/null 2>&1 || true
+            $CONTAINER_ENGINE run -d \
+                --name image-cull-ollama \
+                --restart=unless-stopped \
+                --network host \
+                -e "OLLAMA_HOST=127.0.0.1:${PORT}" \
+                -v image-cull-ollama-models:/root/.ollama:z \
+                docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
+        else
+            $CONTAINER_ENGINE start image-cull-ollama >/dev/null 2>&1 || true
+        fi
     else
         $CONTAINER_ENGINE run -d \
             --name image-cull-ollama \
             --restart=unless-stopped \
             --network host \
-            -e "OLLAMA_HOST=0.0.0.0:${PORT}" \
+            -e "OLLAMA_HOST=127.0.0.1:${PORT}" \
             -v image-cull-ollama-models:/root/.ollama:z \
             docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
     fi
@@ -170,12 +183,12 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
 
     attempts=0
     ready=false
-    while [ $attempts -lt 20 ]; do
+    while [ $attempts -lt 30 ]; do
         if check_endpoint "http://127.0.0.1:${PORT}"; then
             ready=true
             break
         fi
-        sleep 0.5
+        sleep 1
         attempts=$((attempts + 1))
     done
 
