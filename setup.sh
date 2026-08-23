@@ -141,6 +141,11 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
             ;;
     esac
 
+    WAS_RUNNING=false
+    if [ "$($CONTAINER_ENGINE inspect -f '{{.State.Running}}' image-cull-ollama 2>/dev/null)" = "true" ]; then
+        WAS_RUNNING=true
+    fi
+
     echo "==> Starting container 'image-cull-ollama'..."
     if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
         $CONTAINER_ENGINE start image-cull-ollama >/dev/null 2>&1 || true
@@ -152,7 +157,10 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
             -v image-cull-ollama-models:/root/.ollama \
             docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
     fi
-    SPAWNED_OLLAMA=true
+
+    if [ "$WAS_RUNNING" = false ]; then
+        SPAWNED_OLLAMA=true
+    fi
 
     attempts=0
     ready=false
