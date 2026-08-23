@@ -86,8 +86,14 @@ if ! command -v podman >/dev/null 2>&1; then
     USER_FLAGS=("--user" "$(id -u):$(id -g)")
 fi
 
+ENV_FLAGS=()
+if [ -n "${OLLAMA_HOST:-}" ]; then
+    ENV_FLAGS+=("-e" "OLLAMA_HOST=${OLLAMA_HOST}")
+fi
+
 exec $CONTAINER_ENGINE run --rm --network host \
     "${USER_FLAGS[@]}" \
+    "${ENV_FLAGS[@]}" \
     "${MOUNTS[@]}" \
     image-cull:latest --dir /photos --report-path-display "$REAL_HOST_DIR/cull-report.json" "${CONTAINER_FLAGS[@]}" "${ARGS[@]}"
 EOF
