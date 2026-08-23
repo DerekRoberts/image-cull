@@ -146,6 +146,11 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
         WAS_RUNNING=true
     fi
 
+    PORT="11434"
+    if [[ "$TARGET_ENDPOINT" =~ :([0-9]+) ]]; then
+        PORT="${BASH_REMATCH[1]}"
+    fi
+
     echo "==> Starting container 'image-cull-ollama'..."
     if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
         $CONTAINER_ENGINE start image-cull-ollama >/dev/null 2>&1 || true
@@ -154,7 +159,8 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
             --name image-cull-ollama \
             --restart=unless-stopped \
             --network host \
-            -v image-cull-ollama-models:/root/.ollama \
+            -e "OLLAMA_HOST=0.0.0.0:${PORT}" \
+            -v image-cull-ollama-models:/root/.ollama:z \
             docker.io/ollama/ollama:latest >/dev/null 2>&1 || true
     fi
 
