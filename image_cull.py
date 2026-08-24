@@ -997,7 +997,7 @@ def analyze_quality(img_path: Path, model_name: str, max_dimension: int = 0, fas
             "pocket_shot, floor_shot, screenshot, ui_chrome, duplicate_feel. "
             "High scores for sharp, well-exposed, intentional shots; low scores for "
             "accidental pocket/floor captures, heavy blur, closed eyes on faces, or "
-            "screenshots with UI chrome. Explain your reasoning."
+            "screenshots with UI chrome. Explain your reasoning concisely (1-2 short sentences max)."
         )
         schema = QualityVerdict.model_json_schema()
     try:
@@ -1011,7 +1011,11 @@ def analyze_quality(img_path: Path, model_name: str, max_dimension: int = 0, fas
             format=schema,
             options={"temperature": 0},
         )
-        result = json.loads(response.message.content)
+        try:
+            result = json.loads(response.message.content)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
+            
         if fast:
             QualityVerdictFast(**result)
             result["reasoning"] = ""
@@ -1042,7 +1046,7 @@ def analyze_generation(img_path: Path, model_name: str, max_dimension: int = 0, 
             "intent — a coherent creative mashup scores high. Flag hard failures: extra/missing "
             "limbs, melted features, garbled text, unreadable subjects, obvious generation "
             "collapse. List issues as short snake_case tags (e.g. extra_limbs, garbled_text, "
-            "subject_unrecognizable). Explain your reasoning."
+            "subject_unrecognizable). Explain your reasoning concisely (1-2 short sentences max)."
         )
         schema = GenerationVerdict.model_json_schema()
     try:
@@ -1056,7 +1060,11 @@ def analyze_generation(img_path: Path, model_name: str, max_dimension: int = 0, 
             format=schema,
             options={"temperature": 0},
         )
-        result = json.loads(response.message.content)
+        try:
+            result = json.loads(response.message.content)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
+            
         if fast:
             GenerationVerdictFast(**result)
             result["reasoning"] = ""
@@ -1079,7 +1087,7 @@ def analyze_image(img_path: Path, model_name: str, max_dimension: int = 0, fast:
     else:
         prompt = (
             "Analyze this image for photorealism. Identify if it is realistic, rate it from 1.0 to 10.0, "
-            "list any AI-generated artifacts, and explain your reasoning."
+            "list any AI-generated artifacts, and explain your reasoning concisely (1-2 short sentences max)."
         )
         schema = RealismAnalysis.model_json_schema()
     try:
@@ -1093,7 +1101,11 @@ def analyze_image(img_path: Path, model_name: str, max_dimension: int = 0, fast:
             format=schema,
             options={"temperature": 0}
         )
-        result = json.loads(response.message.content)
+        try:
+            result = json.loads(response.message.content)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
+            
         if fast:
             RealismAnalysisFast(**result)
             result["reasoning"] = ""
