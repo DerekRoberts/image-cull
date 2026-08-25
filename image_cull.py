@@ -1013,7 +1013,7 @@ def analyze_quality(img_path: Path, model_name: str, max_dimension: int = 0, fas
         )
         try:
             result = json.loads(response.message.content)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, TypeError) as e:
             raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
             
         if fast:
@@ -1062,7 +1062,7 @@ def analyze_generation(img_path: Path, model_name: str, max_dimension: int = 0, 
         )
         try:
             result = json.loads(response.message.content)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, TypeError) as e:
             raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
             
         if fast:
@@ -1103,7 +1103,7 @@ def analyze_image(img_path: Path, model_name: str, max_dimension: int = 0, fast:
         )
         try:
             result = json.loads(response.message.content)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, TypeError) as e:
             raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
             
         if fast:

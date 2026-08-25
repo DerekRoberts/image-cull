@@ -153,7 +153,7 @@ if ! check_endpoint "$TARGET_ENDPOINT"; then
 
     echo "==> Starting container 'image-cull-ollama'..."
     if $CONTAINER_ENGINE inspect image-cull-ollama >/dev/null 2>&1; then
-        EXISTING_PORT="$($CONTAINER_ENGINE inspect -f '{{range .Config.Env}}{{println .}}{{end}}' image-cull-ollama 2>/dev/null | awk -F: '/^OLLAMA_HOST=/{print $NF}' || echo "11434")"
+        EXISTING_PORT="$($CONTAINER_ENGINE inspect -f '{{range $k, $v := .NetworkSettings.Ports}}{{(index $v 0).HostPort}}{{end}}' image-cull-ollama 2>/dev/null | head -n1 || echo \"11434\")"
         if [ -z "$EXISTING_PORT" ]; then EXISTING_PORT="11434"; fi
         if [ "$EXISTING_PORT" != "$PORT" ]; then
             if [ "$WAS_RUNNING" = true ]; then
