@@ -431,7 +431,7 @@ def parse_args():
     parser.add_argument(
         "--edit-policy",
         choices=["original", "edited", "both"],
-        default="original",
+        default=None,
         help="How to handle original vs edited file pairs (e.g. IMG_1234.jpg and IMG_1234-edited.jpg) (default: original)",
     )
     parser.add_argument(
@@ -1201,13 +1201,14 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
     else:
         image_paths = [p for p in input_dir.iterdir() if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()]
 
-    edit_rejects = build_edit_policy_map(image_paths, input_dir, getattr(args, "edit_policy", "original")) if "hygiene" in config.lenses else {}
+    edit_policy = getattr(args, "edit_policy", None) or "original"
+    edit_rejects = build_edit_policy_map(image_paths, input_dir, edit_policy) if "hygiene" in config.lenses else {}
     if "hygiene" in config.lenses:
         dupe_paths = [p for p in image_paths if p.relative_to(input_dir).as_posix() not in edit_rejects]
         dupe_map = build_dupe_map(dupe_paths, input_dir)
     else:
         dupe_map = {}
-    if getattr(args, "edit_policy", "both") != "both" and "hygiene" not in config.lenses:
+    if getattr(args, "edit_policy", None) is not None and "hygiene" not in config.lenses:
         print(f"Warning: --edit-policy ignored because hygiene lens is not active (lenses: {', '.join(config.lenses)})")
     if args.min_res is not None and "hygiene" not in config.lenses:
         print(f"Warning: --min-res ignored because hygiene lens is not active (lenses: {', '.join(config.lenses)})")
