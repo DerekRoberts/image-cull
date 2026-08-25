@@ -760,15 +760,17 @@ def scaled_dimensions(width: int, height: int, max_dimension: int) -> tuple[int,
 
 
 def get_original_stem(stem: str) -> str | None:
-    m = re.match(r'^(.*?)[-_]edited$', stem, re.IGNORECASE)
-    if m:
-        return m.group(1)
+    original = stem
     
-    m = re.match(r'^IMG_E(.*)$', stem, re.IGNORECASE)
+    m = re.match(r'^(.*?)[-_]edited$', original, re.IGNORECASE)
     if m:
-        return f"IMG_{m.group(1)}"
-    
-    return None
+        original = m.group(1)
+        
+    m = re.match(r'^IMG_E(.*)$', original, re.IGNORECASE)
+    if m:
+        original = f"IMG_{m.group(1)}"
+        
+    return original if original != stem else None
 
 
 def build_edit_policy_map(image_paths: list[Path], input_dir: Path, policy: str) -> dict[str, str]:
@@ -790,7 +792,13 @@ def build_edit_policy_map(image_paths: list[Path], input_dir: Path, policy: str)
             orig_stem = get_original_stem(p.stem)
             if orig_stem and orig_stem.lower() in stem_map:
                 edited_p = p
-                for orig_p in stem_map[orig_stem.lower()]:
+                candidates = stem_map[orig_stem.lower()]
+                
+                # Prioritize exact extension match
+                exact_ext = [c for c in candidates if c.suffix.lower() == edited_p.suffix.lower()]
+                targets = exact_ext if exact_ext else candidates
+                
+                for orig_p in targets:
                     if policy == "original":
                         edit_rejects[edited_p.relative_to(input_dir).as_posix()] = "edit_policy (prefer original)"
                     elif policy == "edited":
@@ -1193,8 +1201,12 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
     else:
         image_paths = [p for p in input_dir.iterdir() if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()]
 
-    dupe_map = build_dupe_map(image_paths, input_dir) if "hygiene" in config.lenses else {}
     edit_rejects = build_edit_policy_map(image_paths, input_dir, getattr(args, "edit_policy", "original")) if "hygiene" in config.lenses else {}
+    if "hygiene" in config.lenses:
+        dupe_paths = [p for p in image_paths if p.relative_to(input_dir).as_posix() not in edit_rejects]
+        dupe_map = build_dupe_map(dupe_paths, input_dir)
+    else:
+        dupe_map = {}
     if getattr(args, "edit_policy", "both") != "both" and "hygiene" not in config.lenses:
         print(f"Warning: --edit-policy ignored because hygiene lens is not active (lenses: {', '.join(config.lenses)})")
     if args.min_res is not None and "hygiene" not in config.lenses:
@@ -1951,17 +1963,20 @@ def _check_edit_policy():
     assert get_original_stem("IMG_1234-edited") == "IMG_1234"
     assert get_original_stem("PXL_1234_edited") == "PXL_1234"
     assert get_original_stem("IMG_E1234") == "IMG_1234"
+    assert get_original_stem("IMG_E1234-edited") == "IMG_1234"
     assert get_original_stem("normal") is None
 
     p1 = Path("IMG_1234.jpg")
     p2 = Path("IMG_1234-edited.jpg")
     p3 = Path("IMG_E1234.HEIC")
     p4 = Path("IMG_1234.HEIC")
-    paths = [p1, p2, p3, p4]
+    p5 = Path("IMG_E1234-edited.jpg")
+    paths = [p1, p2, p3, p4, p5]
     
     orig_map = build_edit_policy_map(paths, Path("."), "original")
     assert orig_map[p2.as_posix()] == "edit_policy (prefer original)"
     assert orig_map[p3.as_posix()] == "edit_policy (prefer original)"
+    assert orig_map[p5.as_posix()] == "edit_policy (prefer original)"
     assert p1.as_posix() not in orig_map
     assert p4.as_posix() not in orig_map
 
@@ -1970,6 +1985,7 @@ def _check_edit_policy():
     assert edited_map[p4.as_posix()] == "edit_policy (prefer edited)"
     assert p2.as_posix() not in edited_map
     assert p3.as_posix() not in edited_map
+    assert p5.as_posix() not in edited_map
 
 
 def _check_recursive_cull():
