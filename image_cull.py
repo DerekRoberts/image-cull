@@ -396,6 +396,7 @@ def realism_result_entry(filename: str, analysis: dict, *, multi_dimensional: bo
 def parse_args():
     parser = argparse.ArgumentParser(description="Cull and sort AI-generated images based on photorealism using Ollama.")
     parser.add_argument("--dir", default="./photos", help="Input directory containing images (.png, .jpg, .jpeg, .webp)")
+    parser.add_argument("--recursive", action="store_true", help="Recursively traverse input directory")
     parser.add_argument("--filter-dir", default=None, help="Directory to move filtered-out/rejected files into (default: <input_dir>/rejects)")
     parser.add_argument("--model", default="llava", help="Local vision model to query via Ollama")
     parser.add_argument(
@@ -646,10 +647,18 @@ def unique_reject_path(filter_dir: Path, filename: str) -> Path:
     return candidate
 
 
-def move_reject(img_path: Path, filter_dir: Path, move_lock: threading.Lock | None = None) -> Path:
+def move_reject(img_path: Path, input_dir: Path, filter_dir: Path, move_lock: threading.Lock | None = None) -> Path:
     def _move() -> Path:
-        filter_dir.mkdir(parents=True, exist_ok=True)
-        dest = unique_reject_path(filter_dir, img_path.name)
+        resolved_img = img_path.resolve()
+        resolved_input = input_dir.resolve()
+        if not resolved_img.is_relative_to(resolved_input):
+            raise ValueError(f"Path escapes input directory: {img_path}")
+        rel = resolved_img.relative_to(resolved_input)
+        if ".." in rel.parts:
+            raise ValueError(f"Invalid path component '..': {rel}")
+        dest_dir = filter_dir / rel.parent
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = unique_reject_path(dest_dir, img_path.name)
         shutil.move(str(img_path), str(dest))
         return dest
 
@@ -707,12 +716,16 @@ def apply_from_report(
         reason_text = ", ".join(reasons)
         if reject:
             try:
-                dest = move_reject(src, filter_dir)
-                print(f"Moved {filename} → {dest.name} ({reason_text})")
+                dest = move_reject(src, input_dir, filter_dir)
+                try:
+                    dest_print = str(dest.relative_to(filter_dir))
+                except ValueError:
+                    dest_print = dest.name
+                print(f"Moved {filename} → {dest_print} ({reason_text})")
                 entry["applied"] = True
                 entry["applied_at"] = datetime.now(timezone.utc).isoformat()
                 moved += 1
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 print(f"Error moving {filename}: {e}")
                 skipped += 1
         else:
@@ -739,16 +752,17 @@ def scaled_dimensions(width: int, height: int, max_dimension: int) -> tuple[int,
     return max(1, round(width * scale)), max(1, round(height * scale))
 
 
-def build_dupe_map(image_paths: list[Path]) -> dict[str, str]:
-    """Map duplicate filename -> keeper filename (first by sorted name)."""
+def build_dupe_map(image_paths: list[Path], input_dir: Path) -> dict[str, str]:
+    """Map duplicate relative path -> keeper relative path (first by sorted path)."""
     by_hash: dict[str, str] = {}
     dupes: dict[str, str] = {}
-    for path in sorted(image_paths, key=lambda p: p.name):
+    for path in sorted(image_paths, key=lambda p: str(p.relative_to(input_dir))):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        rel_path = path.relative_to(input_dir).as_posix()
         if digest in by_hash:
-            dupes[path.name] = by_hash[digest]
+            dupes[rel_path] = by_hash[digest]
         else:
-            by_hash[digest] = path.name
+            by_hash[digest] = rel_path
     return dupes
 
 
@@ -842,6 +856,7 @@ def ensure_model(model_name: str):
 
 def process_image(
     img_path: Path,
+    input_dir: Path,
     model_name: str,
     config: CullConfig,
     cli_threshold: float,
@@ -857,9 +872,10 @@ def process_image(
     min_res: tuple[int, int] | None = None,
 ) -> dict:
     tag = f"{progress.begin()} " if progress else ""
+    rel_path = img_path.relative_to(input_dir).as_posix()
 
     with print_lock:
-        print(f"{tag}Analyzing {img_path.name}...")
+        print(f"{tag}Analyzing {rel_path}...")
 
     blocks: dict[str, dict] = {}
     try:
@@ -875,19 +891,19 @@ def process_image(
                     print(f"{tag}  Hygiene: keep")
             if hygiene_dict["action"] == "reject":
                 if config.multi_dimensional:
-                    result = result_entry_from_lenses(img_path.name, **blocks)
+                    result = result_entry_from_lenses(rel_path, **blocks)
                 else:
-                    result = {"file": img_path.name, "hygiene": hygiene_dict}
+                    result = {"file": rel_path, "hygiene": hygiene_dict}
                 if not dry_run:
                     meta = {"threshold": cli_threshold, "thresholds": config.thresholds}
                     if should_reject(result, cli_threshold, meta):
                         try:
-                            dest = move_reject(img_path, filter_dir, move_lock)
+                            dest = move_reject(img_path, input_dir, filter_dir, move_lock)
                             with print_lock:
                                 print(f"{tag}  -> Moved filtered image to {dest}")
-                        except OSError as e:
+                        except (OSError, ValueError) as e:
                             with print_lock:
-                                print(f"{tag}  -> Error moving {img_path.name}: {e}")
+                                print(f"{tag}  -> Error moving {rel_path}: {e}")
                             result["move_error"] = str(e)
                     else:
                         with print_lock:
@@ -922,16 +938,16 @@ def process_image(
     except Exception as e:  # noqa: BLE001 — per-image: log and continue batch
         with print_lock:
             traceback.print_exc()
-            print(f"{tag}Error processing {img_path.name}: {e}")
-        return {"file": img_path.name, "status": "error", "error": str(e)}
+            print(f"{tag}Error processing {rel_path}: {e}")
+        return {"file": rel_path, "status": "error", "error": str(e)}
 
     if config.multi_dimensional:
-        result = result_entry_from_lenses(img_path.name, **blocks)
+        result = result_entry_from_lenses(rel_path, **blocks)
     elif blocks.get("ai") is not None:
         # Legacy single-score: rebuild analysis dict from ai block for compat
         ai = blocks["ai"]
         result = realism_result_entry(
-            img_path.name,
+            rel_path,
             {
                 "realism_score": ai["realism_score"],
                 "is_realistic": ai.get("is_realistic", False),
@@ -940,18 +956,18 @@ def process_image(
             },
         )
     else:
-        result = {"file": img_path.name}
+        result = {"file": rel_path}
 
     if not dry_run:
         meta = {"threshold": cli_threshold, "thresholds": config.thresholds}
         if should_reject(result, cli_threshold, meta):
             try:
-                dest = move_reject(img_path, filter_dir, move_lock)
+                dest = move_reject(img_path, input_dir, filter_dir, move_lock)
                 with print_lock:
                     print(f"{tag}  -> Moved filtered image to {dest}")
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 with print_lock:
-                    print(f"{tag}  -> Error moving {img_path.name}: {e}")
+                    print(f"{tag}  -> Error moving {rel_path}: {e}")
                 result["move_error"] = str(e)
         else:
             with print_lock:
@@ -981,7 +997,7 @@ def analyze_quality(img_path: Path, model_name: str, max_dimension: int = 0, fas
             "pocket_shot, floor_shot, screenshot, ui_chrome, duplicate_feel. "
             "High scores for sharp, well-exposed, intentional shots; low scores for "
             "accidental pocket/floor captures, heavy blur, closed eyes on faces, or "
-            "screenshots with UI chrome. Explain your reasoning."
+            "screenshots with UI chrome. Explain your reasoning concisely (1-2 short sentences max)."
         )
         schema = QualityVerdict.model_json_schema()
     try:
@@ -995,7 +1011,11 @@ def analyze_quality(img_path: Path, model_name: str, max_dimension: int = 0, fas
             format=schema,
             options={"temperature": 0},
         )
-        result = json.loads(response.message.content)
+        try:
+            result = json.loads(response.message.content)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
+            
         if fast:
             QualityVerdictFast(**result)
             result["reasoning"] = ""
@@ -1026,7 +1046,7 @@ def analyze_generation(img_path: Path, model_name: str, max_dimension: int = 0, 
             "intent — a coherent creative mashup scores high. Flag hard failures: extra/missing "
             "limbs, melted features, garbled text, unreadable subjects, obvious generation "
             "collapse. List issues as short snake_case tags (e.g. extra_limbs, garbled_text, "
-            "subject_unrecognizable). Explain your reasoning."
+            "subject_unrecognizable). Explain your reasoning concisely (1-2 short sentences max)."
         )
         schema = GenerationVerdict.model_json_schema()
     try:
@@ -1040,7 +1060,11 @@ def analyze_generation(img_path: Path, model_name: str, max_dimension: int = 0, 
             format=schema,
             options={"temperature": 0},
         )
-        result = json.loads(response.message.content)
+        try:
+            result = json.loads(response.message.content)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
+            
         if fast:
             GenerationVerdictFast(**result)
             result["reasoning"] = ""
@@ -1063,7 +1087,7 @@ def analyze_image(img_path: Path, model_name: str, max_dimension: int = 0, fast:
     else:
         prompt = (
             "Analyze this image for photorealism. Identify if it is realistic, rate it from 1.0 to 10.0, "
-            "list any AI-generated artifacts, and explain your reasoning."
+            "list any AI-generated artifacts, and explain your reasoning concisely (1-2 short sentences max)."
         )
         schema = RealismAnalysis.model_json_schema()
     try:
@@ -1077,7 +1101,11 @@ def analyze_image(img_path: Path, model_name: str, max_dimension: int = 0, fast:
             format=schema,
             options={"temperature": 0}
         )
-        result = json.loads(response.message.content)
+        try:
+            result = json.loads(response.message.content)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise RuntimeError(f"Model returned invalid JSON (likely truncated): {e}") from e
+            
         if fast:
             RealismAnalysisFast(**result)
             result["reasoning"] = ""
@@ -1102,8 +1130,19 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
     if needs_vlm:
         ensure_model(args.model)
 
-    image_paths = [p for p in input_dir.iterdir() if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()]
-    dupe_map = build_dupe_map(image_paths) if "hygiene" in config.lenses else {}
+    if getattr(args, "recursive", False):
+        filter_root = filter_dir.resolve(strict=False)
+        image_paths = [
+            p
+            for p in input_dir.rglob("*")
+            if p.suffix.lower() in SUPPORTED_EXTENSIONS
+            and p.is_file()
+            and not p.resolve(strict=False).is_relative_to(filter_root)
+        ]
+    else:
+        image_paths = [p for p in input_dir.iterdir() if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()]
+
+    dupe_map = build_dupe_map(image_paths, input_dir) if "hygiene" in config.lenses else {}
     if args.min_res is not None and "hygiene" not in config.lenses:
         print(f"Warning: --min-res ignored because hygiene lens is not active (lenses: {', '.join(config.lenses)})")
     min_res = args.min_res if "hygiene" in config.lenses else None
@@ -1118,6 +1157,7 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
     def process(img_path: Path) -> dict:
         return process_image(
             img_path,
+            input_dir,
             args.model,
             config,
             args.threshold,
@@ -1128,7 +1168,7 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
             print_lock,
             move_lock,
             progress,
-            dupe_of=dupe_map.get(img_path.name),
+            dupe_of=dupe_map.get(img_path.relative_to(input_dir).as_posix()),
             min_res=min_res,
         )
 
@@ -1405,6 +1445,7 @@ def _self_check():
     _check_generation_profile_cull()
     _check_quality_profile_cull()
     _check_hygiene_profile_cull()
+    _check_recursive_cull()
     _check_quality_score_bounds()
     _check_quality_fast_issue_validation()
     _check_heif_support()
@@ -1522,7 +1563,7 @@ def _check_quality_profile_cull():
         with patch.object(mod, "analyze_quality", side_effect=mock_quality), redirect_stdout(captured), redirect_stderr(io.StringIO()):
             for img in sorted(input_dir.iterdir()):
                 process_image(
-                    img, "llava", config, 6.0, True, filter_dir, 512, False,
+                    img, input_dir, "llava", config, 6.0, True, filter_dir, 512, False,
                     threading.Lock(), threading.Lock(), ScanProgress(3),
                 )
 
@@ -1589,7 +1630,7 @@ def _check_generation_profile_cull():
         with patch.object(mod, "analyze_generation", side_effect=mock_generation), redirect_stdout(captured), redirect_stderr(io.StringIO()):
             for img in sorted(input_dir.iterdir()):
                 process_image(
-                    img, "llava", config, 7.0, True, filter_dir, 512, False,
+                    img, input_dir, "llava", config, 7.0, True, filter_dir, 512, False,
                     threading.Lock(), threading.Lock(), ScanProgress(3),
                 )
 
@@ -1658,7 +1699,7 @@ def _check_hygiene_profile_cull():
         )
         min_res = (512, 512)
         paths = [p for p in input_dir.iterdir() if p.is_file()]
-        dupe_map = build_dupe_map(paths)
+        dupe_map = build_dupe_map(paths, input_dir)
         assert dupe_map == {"keeper.jpg": "dupe.jpg"}
 
         vlm_called: list[str] = []
@@ -1671,9 +1712,9 @@ def _check_hygiene_profile_cull():
         with patch.object(mod, "analyze_image", side_effect=mock_analyze), redirect_stdout(captured), redirect_stderr(io.StringIO()):
             for img in sorted(paths):
                 process_image(
-                    img, "llava", config, 7.0, True, filter_dir, 0, False,
+                    img, input_dir, "llava", config, 7.0, True, filter_dir, 0, False,
                     threading.Lock(), threading.Lock(), ScanProgress(len(paths)),
-                    dupe_of=dupe_map.get(img.name),
+                    dupe_of=dupe_map.get(img.relative_to(input_dir).as_posix()),
                     min_res=min_res,
                 )
 
@@ -1737,7 +1778,7 @@ def _check_process_image_error_handling():
         out = io.StringIO()
         with patch.object(mod, "analyze_image", side_effect=RuntimeError("unexpected")), redirect_stderr(err), redirect_stdout(out):
             result = process_image(
-                img, "llava", legacy, 7.0, True, Path(tmp) / "rejects", 0, False,
+                img, Path(tmp), "llava", legacy, 7.0, True, Path(tmp) / "rejects", 0, False,
                 threading.Lock(), threading.Lock(), ScanProgress(2),
             )
         assert result == {"file": "x.jpg", "status": "error", "error": "unexpected"}
@@ -1848,6 +1889,69 @@ def main():
 
     run_cull(args, input_dir, filter_dir)
 
+
+
+def _check_recursive_cull():
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    from unittest.mock import patch
+    mod = sys.modules[__name__]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        input_dir = Path(tmp) / "input"
+        input_dir.mkdir()
+        sub = input_dir / "sub" / "deep"
+        sub.mkdir(parents=True)
+        (sub / "nested.jpg").write_bytes(b"x")
+        (input_dir / "top.jpg").write_bytes(b"x")
+        
+        filter_dir = input_dir / "rejects"
+        filter_sub = filter_dir / "sub"
+        filter_sub.mkdir(parents=True)
+        (filter_sub / "rejected.jpg").write_bytes(b"x")
+
+        # mock so we can just trace files without ollama logic breaking
+        def mock_process(img_path, *args, **kwargs):
+            return {"file": img_path.relative_to(input_dir).as_posix()}
+        
+        args = argparse.Namespace(
+            dir=str(input_dir),
+            filter_dir=str(filter_dir),
+            recursive=True,
+            model="llava",
+            threshold=5.0,
+            threshold_ai=None,
+            threshold_quality=None,
+            threshold_generation=None,
+            profile=None,
+            checks=None,
+            dry_run=True,
+            min_res=None,
+            max_dimension=0,
+            fast=False,
+            self_check=False,
+            apply_report=None,
+            report_path_display=None,
+            force_reapply=False
+        )
+
+        with (
+            patch.object(mod, "ensure_model"),
+            patch.object(mod, "process_image", side_effect=mock_process),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO())
+        ):
+            run_cull(args, input_dir, filter_dir)
+        
+        report_path = input_dir / DEFAULT_REPORT_NAME
+        _, results = load_report(report_path)
+        files = [r["file"] for r in results]
+        
+        assert len(files) == 2, f"Expected 2 files, got {len(files)}"
+        assert "top.jpg" in files
+        assert "sub/deep/nested.jpg" in files
+        assert "rejects/sub/rejected.jpg" not in files, "Filter dir should be excluded"
 
 if __name__ == "__main__":
     main()
