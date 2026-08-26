@@ -205,7 +205,8 @@ def resolve_cull_config(
             thresholds["quality"] = threshold_quality
         if threshold_generation is not None:
             thresholds["generation"] = threshold_generation
-        return CullConfig(profile=None, lenses=("ai",), thresholds=thresholds)
+        lenses = checks if checks is not None else ("hygiene", "ai")
+        return CullConfig(profile=None, lenses=lenses, thresholds=thresholds)
 
     defaults = PROFILE_DEFAULTS[profile]
     lenses = checks if checks is not None else defaults["lenses"]
@@ -426,6 +427,12 @@ def parse_args():
         default=None,
         metavar="N",
         help="Override generation success cutoff (1.0 to 10.0)",
+    )
+    parser.add_argument(
+        "--edit-policy",
+        choices=["original", "edited", "both"],
+        default=None,
+        help="How to handle original vs edited file pairs (e.g. IMG_1234.jpg and IMG_1234-edited.jpg) (default: original)",
     )
     parser.add_argument(
         "--profile",
@@ -752,6 +759,54 @@ def scaled_dimensions(width: int, height: int, max_dimension: int) -> tuple[int,
     return max(1, round(width * scale)), max(1, round(height * scale))
 
 
+def get_original_stem(stem: str) -> str | None:
+    original = stem
+    
+    m = re.match(r'^(.*?)[-_]edited$', original, re.IGNORECASE)
+    if m:
+        original = m.group(1)
+        
+    m = re.match(r'^IMG_E(.*)$', original, re.IGNORECASE)
+    if m:
+        original = f"IMG_{m.group(1)}"
+        
+    return original if original != stem else None
+
+
+def build_edit_policy_map(image_paths: list[Path], input_dir: Path, policy: str) -> dict[str, str]:
+    if policy == "both":
+        return {}
+        
+    edit_rejects: dict[str, str] = {}
+    
+    dir_map: dict[Path, list[Path]] = {}
+    for p in image_paths:
+        dir_map.setdefault(p.parent, []).append(p)
+        
+    for paths in dir_map.values():
+        stem_map: dict[str, list[Path]] = {}
+        for p in paths:
+            stem_map.setdefault(p.stem.lower(), []).append(p)
+        
+        for p in paths:
+            orig_stem = get_original_stem(p.stem)
+            if orig_stem and orig_stem.lower() in stem_map:
+                edited_p = p
+                candidates = stem_map[orig_stem.lower()]
+                
+                # Prioritize exact extension match
+                exact_ext = [c for c in candidates if c.suffix.lower() == edited_p.suffix.lower()]
+                targets = exact_ext if exact_ext else candidates
+                
+                for orig_p in targets:
+                    if policy == "original":
+                        edit_rejects[edited_p.relative_to(input_dir).as_posix()] = "edit_policy (prefer original)"
+                    elif policy == "edited":
+                        edit_rejects[orig_p.relative_to(input_dir).as_posix()] = "edit_policy (prefer edited)"
+
+    return edit_rejects
+
+
 def build_dupe_map(image_paths: list[Path], input_dir: Path) -> dict[str, str]:
     """Map duplicate relative path -> keeper relative path (first by sorted path)."""
     by_hash: dict[str, str] = {}
@@ -785,9 +840,12 @@ def check_hygiene(
     *,
     dupe_of: str | None = None,
     min_res: tuple[int, int] | None = None,
+    edit_reject_reason: str | None = None,
 ) -> dict:
     if dupe_of is not None:
         return {"action": "reject", "exact_dupe_of": dupe_of}
+    if edit_reject_reason is not None:
+        return {"action": "reject", "reason": edit_reject_reason}
 
     from PIL import Image, ImageOps
 
@@ -870,6 +928,7 @@ def process_image(
     *,
     dupe_of: str | None = None,
     min_res: tuple[int, int] | None = None,
+    edit_reject_reason: str | None = None,
 ) -> dict:
     tag = f"{progress.begin()} " if progress else ""
     rel_path = img_path.relative_to(input_dir).as_posix()
@@ -880,7 +939,7 @@ def process_image(
     blocks: dict[str, dict] = {}
     try:
         if "hygiene" in config.lenses:
-            hygiene_dict = check_hygiene(img_path, dupe_of=dupe_of, min_res=min_res)
+            hygiene_dict = check_hygiene(img_path, dupe_of=dupe_of, min_res=min_res, edit_reject_reason=edit_reject_reason)
             HygieneVerdict(**hygiene_dict)
             blocks["hygiene"] = hygiene_dict
             with print_lock:
@@ -1142,7 +1201,15 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
     else:
         image_paths = [p for p in input_dir.iterdir() if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()]
 
-    dupe_map = build_dupe_map(image_paths, input_dir) if "hygiene" in config.lenses else {}
+    edit_policy = getattr(args, "edit_policy", None) or "original"
+    edit_rejects = build_edit_policy_map(image_paths, input_dir, edit_policy) if "hygiene" in config.lenses else {}
+    if "hygiene" in config.lenses:
+        dupe_paths = [p for p in image_paths if p.relative_to(input_dir).as_posix() not in edit_rejects]
+        dupe_map = build_dupe_map(dupe_paths, input_dir)
+    else:
+        dupe_map = {}
+    if getattr(args, "edit_policy", None) is not None and "hygiene" not in config.lenses:
+        print(f"Warning: --edit-policy ignored because hygiene lens is not active (lenses: {', '.join(config.lenses)})")
     if args.min_res is not None and "hygiene" not in config.lenses:
         print(f"Warning: --min-res ignored because hygiene lens is not active (lenses: {', '.join(config.lenses)})")
     min_res = args.min_res if "hygiene" in config.lenses else None
@@ -1170,6 +1237,7 @@ def run_cull(args, input_dir: Path, filter_dir: Path):
             progress,
             dupe_of=dupe_map.get(img_path.relative_to(input_dir).as_posix()),
             min_res=min_res,
+            edit_reject_reason=edit_rejects.get(img_path.relative_to(input_dir).as_posix()),
         )
 
     with ThreadPoolExecutor(max_workers=depth) as executor:
@@ -1449,6 +1517,7 @@ def _self_check():
     _check_quality_score_bounds()
     _check_quality_fast_issue_validation()
     _check_heif_support()
+    _check_edit_policy()
 
 
 def _check_heif_support():
@@ -1768,7 +1837,7 @@ def _check_process_image_error_handling():
 
     mod = sys.modules[__name__]
     legacy = resolve_cull_config(
-        profile=None, checks=None, threshold=7.0,
+        profile="mixed", checks=("ai",), threshold=7.0,
         threshold_ai=None, threshold_quality=None, threshold_generation=None,
     )
     with tempfile.TemporaryDirectory() as tmp:
@@ -1819,8 +1888,8 @@ def _check_run_cull_progress_tags():
             threshold_ai=None,
             threshold_quality=None,
             threshold_generation=None,
-            profile=None,
-            checks=None,
+            profile="mixed",
+            checks=("ai",),
             dry_run=False,
             max_dimension=0,
             min_res=None,
@@ -1889,6 +1958,35 @@ def main():
 
     run_cull(args, input_dir, filter_dir)
 
+
+
+def _check_edit_policy():
+    assert get_original_stem("IMG_1234-edited") == "IMG_1234"
+    assert get_original_stem("PXL_1234_edited") == "PXL_1234"
+    assert get_original_stem("IMG_E1234") == "IMG_1234"
+    assert get_original_stem("IMG_E1234-edited") == "IMG_1234"
+    assert get_original_stem("normal") is None
+
+    p1 = Path("IMG_1234.jpg")
+    p2 = Path("IMG_1234-edited.jpg")
+    p3 = Path("IMG_E1234.HEIC")
+    p4 = Path("IMG_1234.HEIC")
+    p5 = Path("IMG_E1234-edited.jpg")
+    paths = [p1, p2, p3, p4, p5]
+    
+    orig_map = build_edit_policy_map(paths, Path("."), "original")
+    assert orig_map[p2.as_posix()] == "edit_policy (prefer original)"
+    assert orig_map[p3.as_posix()] == "edit_policy (prefer original)"
+    assert orig_map[p5.as_posix()] == "edit_policy (prefer original)"
+    assert p1.as_posix() not in orig_map
+    assert p4.as_posix() not in orig_map
+
+    edited_map = build_edit_policy_map(paths, Path("."), "edited")
+    assert edited_map[p1.as_posix()] == "edit_policy (prefer edited)"
+    assert edited_map[p4.as_posix()] == "edit_policy (prefer edited)"
+    assert p2.as_posix() not in edited_map
+    assert p3.as_posix() not in edited_map
+    assert p5.as_posix() not in edited_map
 
 
 def _check_recursive_cull():
